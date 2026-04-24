@@ -751,11 +751,29 @@
     document.addEventListener('click', unlockAudio, { once: true });
     document.addEventListener('touchstart', unlockAudio, { once: true });
     
-    let baiduAudio = null;  // 当前播放的音频
+    let audioContext = null;
+    let currentSource = null;
+    let baiduTokenCached = null;
     
-    // 获取百度TTS Access Token
+    // 初始化 Web Audio API（兼容移动端）
+    function getAudioContext() {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      return audioContext;
+    }
+    
+    // 停止当前播放的音频
+    function stopCurrentAudio() {
+      if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource = null;
+      }
+    }
+    
+    // 获取百度TTS Access Token（带缓存）
     async function getBaiduToken() {
-      if (BAIDU_TTS_CONFIG.token) return BAIDU_TTS_CONFIG.token;
+      if (baiduTokenCached) return baiduTokenCached;
       
       const tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_TTS_CONFIG.apiKey}&client_secret=${BAIDU_TTS_CONFIG.secretKey}`;
       
@@ -763,6 +781,7 @@
         const response = await fetch(tokenUrl, { method: 'POST' });
         const data = await response.json();
         if (data.access_token) {
+          baiduTokenCached = data.access_token;
           BAIDU_TTS_CONFIG.token = data.access_token;
           return data.access_token;
         }
@@ -772,29 +791,61 @@
       return null;
     }
     
-    // 使用百度TTS播放文字
+    // 使用百度 REST API（绕过CDN，移动端友好）
     async function speakWithBaidu(text) {
-      const token = await getBaiduToken();
-      if (!token) {
-        // Token获取失败，回退到浏览器语音
+      try {
+        // 确保 AudioContext 已解锁（移动端必须）
+        const ctx = getAudioContext();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        
+        stopCurrentAudio();
+        
+        const token = baiduTokenCached || (await getBaiduToken());
+        if (!token) {
+          speakWithBrowser(text);
+          return;
+        }
+        
+        // 百度 REST API - 返回原始二进制音频数据
+        const response = await fetch('https://aip.baidubce.com/rpc/2.0/tts/v1/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({
+            tex: text,
+            tok: token,
+            cuid: 'hanzi_game_' + Date.now(),
+            lan: 'zh',
+            ctp: 1,
+            aue: 3,   // 3=mp3
+            spd: 5,
+            pit: 5,
+            vol: 9,
+            per: 0
+          })
+        });
+        
+        // 检查是否为二进制音频（Content-Type 含 audio）
+        const contentType = response.headers.get('Content-Type') || '';
+        
+        if (contentType.includes('audio') || contentType.includes('octet')) {
+          // 二进制音频 → 用 Web Audio API 播放
+          const arrayBuffer = await response.arrayBuffer();
+          const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+          currentSource = ctx.createBufferSource();
+          currentSource.buffer = audioBuffer;
+          currentSource.connect(ctx.destination);
+          currentSource.start();
+        } else {
+          // 返回了错误JSON → 回退到浏览器语音
+          console.warn('TTS REST API 返回异常，回退到浏览器语音');
+          speakWithBrowser(text);
+        }
+      } catch (e) {
+        console.error('TTS播放失败:', e);
         speakWithBrowser(text);
-        return;
       }
-      
-      // 停止之前播放的音频
-      if (baiduAudio) {
-        baiduAudio.pause();
-        baiduAudio = null;
-      }
-      
-      // 构建TTS请求
-      const ttsUrl = `https://tsn.baidu.com/text2audio?tex=${encodeURIComponent(text)}&tok=${token}&cuid=baidu_tts&lan=zh&ctp=1&pdt=301&vol=9&rate=4&per=0`;
-      
-      baiduAudio = new Audio(ttsUrl);
-      baiduAudio.play().catch(e => {
-        console.log('百度TTS播放失败，回退到浏览器语音');
-        speakWithBrowser(text);
-      });
     }
     
     // 浏览器原生语音（备选方案）
