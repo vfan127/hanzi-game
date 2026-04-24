@@ -716,104 +716,104 @@
       startLevel(currentLevel);
     }
 
-  // ===== 语音播放 - 移动端兼容方案 =====
+  // ===== 语音播放 - 移动端完全兼容方案 =====
     
     // 百度TTS配置
     const BAIDU_TTS_CONFIG = {
       apiKey: 'Exz0VO2k7Fz3aHlpQi8WJF7Z',
-      secretKey: 'vK8eCZy95uyUsXCJABKIkHpaFNuCkJXS',
-      token: null
+      secretKey: 'vK8eCZy95uyUsXCJABKIkHpaFNuCkJXS'
     };
 
-    // 关键：全局复用同一个Audio元素（移动端已激活的元素才能播放）
-    const ttsAudio = new Audio();
-    let baiduTokenCached = null;
-    let audioActivated = false;
+    // 音频管理器
+    let ttsToken = null;      // Token
+    let ttsReady = false;      // 是否已就绪
+    let ttsLoading = false;    // 是否正在加载
 
-    // ===== 音频解锁（移动端必须） =====
-    // 手机浏览器要求：必须先在用户手势中播放过一次音频，后续才能播放
-    function activateAudio() {
-      if (audioActivated) return;
-      ttsAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
-      ttsAudio.play().then(() => { audioActivated = true; }).catch(() => {});
-    }
-    document.addEventListener('touchstart', activateAudio, { once: true });
-    document.addEventListener('click', activateAudio, { once: true });
-
-    // ===== 预获取Token（页面加载时执行，不等用户点击） =====
-    async function initBaiduTTS() {
+    // 页面加载时：立即开始获取Token
+    async function initTTS() {
+      if (ttsReady || ttsLoading) return;
+      ttsLoading = true;
+      updateStartBtn('加载语音...');
+      
       try {
-        const url = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_TTS_CONFIG.apiKey}&client_secret=${BAIDU_TTS_CONFIG.secretKey}`;
-        const res = await fetch(url, { method: 'POST' });
+        const res = await fetch(
+          `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_TTS_CONFIG.apiKey}&client_secret=${BAIDU_TTS_CONFIG.secretKey}`,
+          { method: 'POST' }
+        );
         const data = await res.json();
-        if (data.access_token) {
-          baiduTokenCached = data.access_token;
-        }
+        ttsToken = data.access_token;
+        ttsReady = true;
+        ttsLoading = false;
+        updateStartBtn('开始闯关 🚀');
       } catch (e) {
-        console.error('Token预获取失败:', e);
+        console.error('TTS初始化失败:', e);
+        ttsLoading = false;
+        updateStartBtn('开始闯关 🚀'); // 仍然允许开始，失败时用浏览器语音
       }
     }
-    // 页面加载时立即预取Token
-    initBaiduTTS();
 
-    // ===== 核心播放函数（同步！不能有await！） =====
-    // 移动端铁律：audio.play() 必须在用户点击的同一个调用栈里同步执行
-    // 任何 await 都会打断用户手势上下文，导致 play() 被浏览器拒绝
-    function speakWithBaidu(text) {
-      if (!baiduTokenCached) {
-        // Token还没拿到，触发异步获取（下次就能用了），这次用浏览器语音兜底
-        initBaiduTTS();
-        speakWithBrowser(text);
-        return;
-      }
-
-      // 暂停之前的播放
-      ttsAudio.pause();
-
-      // 构建CDN URL并立即播放 —— 全部同步执行，保持用户手势上下文
-      const ttsUrl = `https://tsn.baidu.com/text2audio?tex=${encodeURIComponent(text)}&tok=${baiduTokenCached}&cuid=hanzi_game&lan=zh&ctp=1&pdt=301&vol=9&spd=5&pit=5&per=0`;
-      ttsAudio.src = ttsUrl;
-      ttsAudio.play().catch(e => {
-        console.warn('CDN播放失败，尝试浏览器语音');
-        speakWithBrowser(text);
-      });
+    // 更新开始按钮文字
+    function updateStartBtn(text) {
+      const btn = document.getElementById('startBtn');
+      if (btn) btn.textContent = text;
     }
-    
-    // 浏览器原生语音（备选方案）
+
+    // 点击"开始闯关"：正常进入游戏
+    function startGame() {
+      document.getElementById('homeScreen').style.display = 'none';
+      document.getElementById('gameScreen').style.display = 'flex';
+      startLevel(currentLevel);
+    }
+
+    // 核心播放函数（100%同步，无任何await）
+    function speak(text) {
+      if (!soundEnabled) return;
+
+      if (ttsReady && ttsToken) {
+        // Token已准备好，直接播放
+        const url = `https://tsn.baidu.com/text2audio?tex=${encodeURIComponent(text)}&tok=${ttsToken}&cuid=hanzi_game&lan=zh&ctp=1&pdt=301&vol=9&spd=5&pit=5&per=0`;
+        const audio = new Audio(url);
+        audio.volume = 1.0;
+        audio.play().catch(() => {});
+      } else {
+        // Token还没好，用浏览器语音兜底
+        speakWithBrowser(text);
+      }
+    }
+
+    // 浏览器语音（兜底）
     function speakWithBrowser(text) {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'zh-CN';
-        utterance.rate = 0.8;
-        utterance.pitch = 1.0;
-        const voices = window.speechSynthesis.getVoices();
-        const zhVoice = voices.find(v => v.lang.startsWith('zh'));
-        if (zhVoice) utterance.voice = zhVoice;
-        window.speechSynthesis.speak(utterance);
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = 'zh-CN'; u.rate = 0.8; u.pitch = 1.0;
+        window.speechSynthesis.speak(u);
       }
     }
+
+    // 页面加载时自动启动TTS初始化
+    initTTS();
     
     function playCharSound() {
       if (!soundEnabled || !currentChar) return;
-      speakWithBaidu(currentChar.char);
+      speak(currentChar.char);
     }
 
     function speakText(text) {
       if (!soundEnabled) return;
-      speakWithBaidu(text);
+      speak(text);
     }
 
     function playCorrectSound() {
-      speakWithBaidu('答对啦！');
+      speak('答对啦！');
     }
 
     function playWrongSound() {
-      speakWithBaidu('再想一想');
+      speak('再想一想');
     }
 
     function playCelebrateSound() {
-      speakWithBaidu('恭喜过关！你真棒！');
+      speak('恭喜过关！你真棒！');
     }
 
     function toggleSound() {
