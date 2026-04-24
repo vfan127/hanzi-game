@@ -7,11 +7,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta property="og:title" content="汉字大闯关 - 趣味学汉字">
   <meta property="og:description" content="适合儿童的汉字学习小游戏，闯关方式学会1600个常见汉字！">
-  <meta property="og:image" content="https://img.icons8.com/emoji/96/000000/large-green-circle.png">
   <title>汉字大闯关 🎮 趣味学汉字</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -343,6 +342,21 @@
       z-index: 199;
     }
 
+    /* ===== 离线标识 ===== */
+    .offline-badge {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+      color: white;
+      padding: 8px 15px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      z-index: 1000;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+
     /* ===== 动画 ===== */
     @keyframes fadeIn {
       from { opacity: 0; } to { opacity: 1; }
@@ -381,10 +395,6 @@
       60% { opacity: 1; transform: scale(1.3) rotate(10deg); }
       100% { opacity: 1; transform: scale(1) rotate(0deg); }
     }
-    @keyframes confetti {
-      0% { transform: translateY(0) rotate(0deg); opacity: 1; }
-      100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
-    }
 
     /* ===== 响应式 ===== */
     @media (max-height: 680px) {
@@ -403,6 +413,9 @@
   </style>
 </head>
 <body>
+
+  <!-- 离线标识 -->
+  <div class="offline-badge">🔌 完全离线</div>
 
   <div class="container">
     <!-- ===== 首页 ===== -->
@@ -470,24 +483,183 @@
     let currentLevel = 1;
     let currentCharIndex = 0;
     let correctCount = 0;
-    let wrongChars = [];       // 本关答错的字
-    let roundQueue = [];       // 当前轮的题目队列
+    let wrongChars = [];
+    let roundQueue = [];
     let roundIndex = 0;
-    let isFirstRound = true;   // 是否是第一轮（10题）
+    let isFirstRound = true;
     let soundEnabled = true;
-    let isWaiting = false;     // 防止重复点击
-    let currentChar = null;    // 当前题目
+    let isWaiting = false;
+    let currentChar = null;
+    let playCount = 0;  // 播放次数计数
+    let isSpeaking = false;  // 防止重复播放
+
+    // ===== 语音提示音系统 - 使用百度TTS生成的音频 =====
+    let sfxAudio = {};  // 提示音缓存
+    let charAudioCache = {};  // 汉字音频缓存
+
+    // 提示音配置
+    const SFX_CONFIG = {
+      correct: ['sfx/correct_1.mp3', 'sfx/correct_2.mp3', 'sfx/correct_3.mp3',
+                'sfx/correct_4.mp3', 'sfx/correct_5.mp3', 'sfx/correct_6.mp3'],
+      wrong: ['sfx/wrong_1.mp3', 'sfx/wrong_2.mp3', 'sfx/wrong_3.mp3', 'sfx/wrong_4.mp3'],
+      celebrate: ['sfx/celebrate.mp3']
+    };
+
+    // 预加载提示音
+    function preloadSFX() {
+      Object.values(SFX_CONFIG).forEach(files => {
+        files.forEach(file => {
+          const audio = new Audio(file);
+          audio.preload = 'auto';
+        });
+      });
+      console.log('SFX preloaded');
+    }
+
+    // 播放本地音频文件
+    function playLocalAudio(src, onEnd) {
+      if (!soundEnabled) {
+        if (onEnd) onEnd();
+        return;
+      }
+
+      const audio = new Audio(src);
+      audio.onended = () => {
+        if (onEnd) onEnd();
+      };
+      audio.onerror = () => {
+        console.log('Audio load failed:', src);
+        if (onEnd) onEnd();
+      };
+      audio.play().catch(e => {
+        console.log('Audio play failed:', e);
+        if (onEnd) onEnd();
+      });
+    }
+
+    // 播放提示音 - 答对
+    function playCorrectSound() {
+      const files = SFX_CONFIG.correct;
+      const randomFile = files[Math.floor(Math.random() * files.length)];
+      playLocalAudio(randomFile);
+    }
+
+    // 播放提示音 - 答错
+    function playWrongSound() {
+      const files = SFX_CONFIG.wrong;
+      const randomFile = files[Math.floor(Math.random() * files.length)];
+      playLocalAudio(randomFile);
+    }
+
+    // 播放提示音 - 庆祝
+    function playCelebrateSound() {
+      playLocalAudio('sfx/celebrate.mp3');
+    }
+
+    // 播放汉字发音（使用本地缓存或Web Speech API兜底）
+    function speak(text, onEnd) {
+      if (!soundEnabled) {
+        if (onEnd) onEnd();
+        return;
+      }
+
+      // 先尝试播放本地音频
+      const charAudio = charAudioCache[text];
+      if (charAudio) {
+        playLocalAudio(charAudio, onEnd);
+        return;
+      }
+
+      // 兜底：使用Web Speech API
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 0.85;
+        utterance.pitch = 1.1;
+        utterance.onend = () => {
+          isSpeaking = false;
+          if (onEnd) onEnd();
+        };
+        utterance.onerror = () => {
+          isSpeaking = false;
+          if (onEnd) onEnd();
+        };
+        isSpeaking = true;
+        speechSynthesis.speak(utterance);
+      } else {
+        if (onEnd) onEnd();
+      }
+    }
+
+    // 播放汉字2次，间隔1秒
+    function playCharSound() {
+      if (!currentChar || isWaiting) return;
+
+      playCount = 0;
+      playCharacterTwice();
+    }
+
+    function playCharacterTwice() {
+      if (!currentChar) return;
+
+      speak(currentChar.char, () => {
+        playCount++;
+        if (playCount < 2) {
+          // 间隔1秒后播放第二次
+          setTimeout(playCharacterTwice, 1000);
+        }
+      });
+    }
+
+    // 播放答对语音（鼓励语）
+    function playCorrectSound() {
+      const encouragements = [
+        '太棒了！',
+        '真厉害！',
+        '你真聪明！',
+        '继续保持！',
+        '太优秀了！',
+        '完美！'
+      ];
+      const msg = encouragements[Math.floor(Math.random() * encouragements.length)];
+      speak(msg);
+    }
+
+    // 播放答错语音（鼓励语）
+    function playWrongSound() {
+      const tryAgain = [
+        '没关系，再试一次！',
+        '加油，你可以的！',
+        '别灰心，继续努力！',
+        '下一次一定行！'
+      ];
+      const msg = tryAgain[Math.floor(Math.random() * tryAgain.length)];
+      speak(msg);
+    }
+
+    // 播放庆祝语音
+    function playCelebrateSound() {
+      speak('恭喜过关！你真棒！');
+    }
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      document.getElementById('soundToggle').textContent = soundEnabled ? '🔊' : '🔇';
+      // 停止当前语音
+      if (!soundEnabled && 'speechSynthesis' in window) {
+        speechSynthesis.cancel();
+      }
+    }
 
     // ===== 初始化 =====
     function init() {
-      // 读取进度
       const saved = localStorage.getItem('hanzi_game_progress');
       if (saved) currentLevel = parseInt(saved) || 1;
-      
-      // 检查是否已完成所有关卡
+
       const totalLevels = getTotalLevels();
       if (currentLevel > totalLevels) currentLevel = 1;
-      
+
       updateHomeProgress();
     }
 
@@ -520,7 +692,6 @@
       roundQueue = shuffleArray([...levelData]);
       roundIndex = 0;
 
-      // 保存进度
       localStorage.setItem('hanzi_game_progress', level);
 
       updateTopBar();
@@ -538,43 +709,41 @@
     // ===== 显示题目 =====
     function showQuestion() {
       if (isWaiting) return;
-      
+
       if (roundIndex >= roundQueue.length) {
         if (isFirstRound && wrongChars.length > 0) {
-          // 进入错题轮
           isFirstRound = false;
           roundQueue = shuffleArray([...wrongChars]);
           roundIndex = 0;
-          correctCount = 0; // 重置计数，要求全部答对
+          correctCount = 0;
           updateTopBar();
           showQuestion();
           return;
         }
-        // 全部答对，过关！
         levelComplete();
         return;
       }
 
       currentChar = roundQueue[roundIndex];
       const card = document.getElementById('questionCard');
-      
-      // 动画效果
+
       card.style.animation = 'none';
-      card.offsetHeight; // 触发重排
+      card.offsetHeight;
       card.style.animation = 'slideUp 0.4s ease';
 
-      // 填充内容
       document.getElementById('categoryTag').innerHTML = `${currentChar.emoji} ${currentChar.category}`;
       document.getElementById('pinyinDisplay').textContent = currentChar.pinyin;
       document.getElementById('meaningText').textContent = currentChar.meaning;
       document.getElementById('emojiDisplay').textContent = currentChar.emoji;
 
-      // 生成选项（形近字）
       const options = generateOptions(currentChar);
       renderOptions(options);
-      
-      // 自动播放读音
-      setTimeout(() => playCharSound(), 300);
+
+      // 自动播放发音2次
+      setTimeout(() => {
+        playCount = 0;
+        playCharacterTwice();
+      }, 300);
     }
 
     // ===== 生成选项 =====
@@ -588,13 +757,12 @@
     function renderOptions(options) {
       const grid = document.getElementById('optionsGrid');
       grid.innerHTML = '';
-      
+
       options.forEach((char, i) => {
         const btn = document.createElement('button');
         btn.className = 'option-btn';
         btn.textContent = char;
         btn.onclick = () => selectOption(btn, char);
-        // 添加动画延迟
         btn.style.animation = `slideUp 0.3s ease ${i * 0.08}s both`;
         grid.appendChild(btn);
       });
@@ -606,19 +774,17 @@
       isWaiting = true;
 
       const allBtns = document.querySelectorAll('.option-btn');
-      
+
       if (selectedChar === currentChar.char) {
-        // ✅ 答对了
         btn.classList.add('correct');
         allBtns.forEach(b => { if (b !== btn) b.classList.add('disabled'); });
-        
+
         correctCount++;
         updateTopBar();
-        
+
         showFeedback('👍', '答对啦！');
         playCorrectSound();
-        
-        // 移除错题池中的这个字
+
         wrongChars = wrongChars.filter(c => c.char !== currentChar.char);
 
         setTimeout(() => {
@@ -628,10 +794,8 @@
         }, 1500);
 
       } else {
-        // ❌ 答错了
         btn.classList.add('wrong');
-        
-        // 添加到错题池
+
         if (!wrongChars.find(c => c.char === currentChar.char)) {
           wrongChars.push(currentChar);
         }
@@ -651,10 +815,10 @@
       const overlay = document.getElementById('feedbackOverlay');
       const emojiEl = document.getElementById('feedbackEmoji');
       const textEl = document.getElementById('feedbackText');
-      
+
       emojiEl.textContent = emoji;
       textEl.textContent = text;
-      
+
       overlay.style.display = 'flex';
       emojiEl.style.animation = 'none';
       textEl.style.animation = 'none';
@@ -671,16 +835,14 @@
     function levelComplete() {
       const totalLevels = getTotalLevels();
       const isLastLevel = currentLevel >= totalLevels;
-      
-      // 保存进度
+
       if (!isLastLevel) {
         localStorage.setItem('hanzi_game_progress', currentLevel + 1);
       }
 
-      // 显示过关页面
       const screen = document.getElementById('levelCompleteScreen');
       screen.style.display = 'flex';
-      
+
       if (isLastLevel) {
         document.getElementById('celebrationTitle').textContent = '🏆 全部通关！';
         document.getElementById('celebrationSubtitle').textContent = '太厉害了！你已学会所有汉字！';
@@ -691,22 +853,18 @@
         document.querySelector('.next-level-btn').textContent = '下一关 ➡️';
       }
 
-      // 播放庆祝音效
       playCelebrateSound();
-      
-      // 放彩色粒子
       startConfetti();
     }
 
     // ===== 下一关 =====
     function nextLevel() {
       const totalLevels = getTotalLevels();
-      
+
       document.getElementById('levelCompleteScreen').style.display = 'none';
       stopConfetti();
 
       if (currentLevel >= totalLevels) {
-        // 重新开始
         currentLevel = 1;
         localStorage.setItem('hanzi_game_progress', 1);
       } else {
@@ -716,135 +874,19 @@
       startLevel(currentLevel);
     }
 
-  // ===== 语音播放 - 移动端完全兼容方案 =====
-    
-    // 百度TTS配置
-    const BAIDU_TTS_CONFIG = {
-      apiKey: 'Exz0VO2k7Fz3aHlpQi8WJF7Z',
-      secretKey: 'vK8eCZy95uyUsXCJABKIkHpaFNuCkJXS'
-    };
-
-    // 音频管理器
-    let ttsToken = null;      // Token
-    let ttsReady = false;      // 是否已就绪
-    let ttsLoading = false;    // 是否正在加载
-
-    // 页面加载时：立即开始获取Token
-    async function initTTS() {
-      if (ttsReady || ttsLoading) return;
-      ttsLoading = true;
-      updateStartBtn('加载语音...');
-      
-      try {
-        const res = await fetch(
-          `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_TTS_CONFIG.apiKey}&client_secret=${BAIDU_TTS_CONFIG.secretKey}`,
-          { method: 'POST' }
-        );
-        const data = await res.json();
-        ttsToken = data.access_token;
-        ttsReady = true;
-        ttsLoading = false;
-        updateStartBtn('开始闯关 🚀');
-      } catch (e) {
-        console.error('TTS初始化失败:', e);
-        ttsLoading = false;
-        updateStartBtn('开始闯关 🚀'); // 仍然允许开始，失败时用浏览器语音
-      }
-    }
-
-    // 更新开始按钮文字
-    function updateStartBtn(text) {
-      const btn = document.getElementById('startBtn');
-      if (btn) btn.textContent = text;
-    }
-
-    // 点击"开始闯关"：正常进入游戏
-    function startGame() {
-      document.getElementById('homeScreen').style.display = 'none';
-      document.getElementById('gameScreen').style.display = 'flex';
-      startLevel(currentLevel);
-    }
-
-    // 核心播放函数（100%同步，无任何await）
-    function speak(text) {
-      if (!soundEnabled) return;
-
-      if (ttsReady && ttsToken) {
-        // Token已准备好，直接播放
-        const url = `https://tsn.baidu.com/text2audio?tex=${encodeURIComponent(text)}&tok=${ttsToken}&cuid=hanzi_game&lan=zh&ctp=1&pdt=301&vol=9&spd=5&pit=5&per=0`;
-        const audio = new Audio(url);
-        audio.volume = 1.0;
-        audio.play().catch(() => {});
-      } else {
-        // Token还没好，用浏览器语音兜底
-        speakWithBrowser(text);
-      }
-    }
-
-    // 浏览器语音（兜底）
-    function speakWithBrowser(text) {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = 'zh-CN'; u.rate = 0.8; u.pitch = 1.0;
-        window.speechSynthesis.speak(u);
-      }
-    }
-
-    // 页面加载时自动启动TTS初始化
-    initTTS();
-    
-    function playCharSound() {
-      if (!soundEnabled || !currentChar) return;
-      speak(currentChar.char);
-    }
-
-    function speakText(text) {
-      if (!soundEnabled) return;
-      speak(text);
-    }
-
-    function playCorrectSound() {
-      speak('答对啦！');
-    }
-
-    function playWrongSound() {
-      speak('再想一想');
-    }
-
-    function playCelebrateSound() {
-      speak('恭喜过关！你真棒！');
-    }
-
-    function toggleSound() {
-      soundEnabled = !soundEnabled;
-      document.getElementById('soundToggle').textContent = soundEnabled ? '🔊' : '🔇';
-    }
-
-    // 预加载语音（浏览器兼容）
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
-      document.addEventListener('touchstart', function initVoices() {
-        window.speechSynthesis.getVoices();
-        document.removeEventListener('touchstart', initVoices);
-      }, { once: true });
-    }
-
     // ===== 彩色粒子效果 =====
     let confettiAnimationId = null;
     let confettiParticles = [];
-    
+
     function startConfetti() {
       const canvas = document.getElementById('confetti-canvas');
       const ctx = canvas.getContext('2d');
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      
+
       confettiParticles = [];
       const colors = ['#f093fb', '#f5576c', '#ffd700', '#4CAF50', '#2196F3', '#FF5722', '#9C27B0'];
-      
+
       for (let i = 0; i < 80; i++) {
         confettiParticles.push({
           x: Math.random() * canvas.width,
@@ -863,17 +905,17 @@
       function animate() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         let alive = false;
-        
+
         confettiParticles.forEach(p => {
           p.x += p.vx;
           p.y += p.vy;
           p.vy += 0.05;
           p.rotate += p.rotateSpeed;
-          
+
           if (p.y > canvas.height) {
             p.opacity -= 0.02;
           }
-          
+
           if (p.opacity > 0) {
             alive = true;
             ctx.save();
@@ -890,7 +932,7 @@
           confettiAnimationId = requestAnimationFrame(animate);
         }
       }
-      
+
       animate();
     }
 
@@ -911,8 +953,16 @@
       canvas.height = window.innerHeight;
     });
 
+    // ===== 页面可见性变化 - 修复后台停止语音 =====
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && 'speechSynthesis' in window) {
+        speechSynthesis.cancel();
+      }
+    });
+
     // ===== 启动 =====
     init();
+    preloadSFX();
   </script>
 </body>
 </html>

@@ -1,0 +1,46 @@
+{
+  "correct_1": {
+    "file": "sfx/correct_1.mp3",
+    "text": "太棒了！"
+  },
+  "correct_2": {
+    "file": "sfx/correct_2.mp3",
+    "text": "真厉害！"
+  },
+  "correct_3": {
+    "file": "sfx/correct_3.mp3",
+    "text": "你真聪明！"
+  },
+  "correct_4": {
+    "file": "sfx/correct_4.mp3",
+    "text": "继续保持！"
+  },
+  "correct_5": {
+    "file": "sfx/correct_5.mp3",
+    "text": "太优秀了！"
+  },
+  "correct_6": {
+    "file": "sfx/correct_6.mp3",
+    "text": "完美！"
+  },
+  "wrong_1": {
+    "file": "sfx/wrong_1.mp3",
+    "text": "没关系，再试一次！"
+  },
+  "wrong_2": {
+    "file": "sfx/wrong_2.mp3",
+    "text": "加油，你可以的！"
+  },
+  "wrong_3": {
+    "file": "sfx/wrong_3.mp3",
+    "text": "别灰心，继续努力！"
+  },
+  "wrong_4": {
+    "file": "sfx/wrong_4.mp3",
+    "text": "下一次一定行！"
+  },
+  "celebrate": {
+    "file": "sfx/celebrate.mp3",
+    "text": "恭喜过关！你真棒！"
+  }
+}
