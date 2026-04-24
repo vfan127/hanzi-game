@@ -716,38 +716,122 @@
       startLevel(currentLevel);
     }
 
-    // ===== 语音播放 =====
-    function playCharSound() {
-      if (!soundEnabled || !currentChar) return;
-      speakText(currentChar.char);
+  // ===== 语音播放 - 百度TTS =====
+    
+    // ===== 微信音频解锁 + 百度TTS配置 =====
+
+    // ⚠️ 已在下方填入真实密钥，请勿泄露
+    const BAIDU_TTS_CONFIG = {
+      apiKey: 'Exz0VO2k7Fz3aHlpQi8WJF7Z',
+      secretKey: 'vK8eCZy95uyUsXCJABKIkHpaFNuCkJXS',
+      token: null
+    };
+
+    // ===== 微信音频解锁 =====
+    // 微信WebView要求用户交互后才能播放音频
+    // 预载一个不可闻的静音音频，触碰它即可解锁后续所有音频播放
+    let audioUnlocked = false;
+    let silentAudio = null;
+
+    function unlockAudio() {
+      if (audioUnlocked) return;
+      try {
+        silentAudio = new Audio();
+        // 一段极短（约0.1秒）的静音 WAV (单声道 8000Hz)
+        // data:audio/wav;base64,... 体积小、兼容性好
+        silentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+        silentAudio.volume = 0.01;
+        silentAudio.play().then(() => {
+          audioUnlocked = true;
+        }).catch(() => {});
+      } catch (e) {}
     }
 
-    function speakText(text) {
-      if (!soundEnabled) return;
+    // 任何用户点击/触摸页面，立即解锁音频上下文
+    document.addEventListener('click', unlockAudio, { once: true });
+    document.addEventListener('touchstart', unlockAudio, { once: true });
+    
+    let baiduAudio = null;  // 当前播放的音频
+    
+    // 获取百度TTS Access Token
+    async function getBaiduToken() {
+      if (BAIDU_TTS_CONFIG.token) return BAIDU_TTS_CONFIG.token;
+      
+      const tokenUrl = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${BAIDU_TTS_CONFIG.apiKey}&client_secret=${BAIDU_TTS_CONFIG.secretKey}`;
+      
+      try {
+        const response = await fetch(tokenUrl, { method: 'POST' });
+        const data = await response.json();
+        if (data.access_token) {
+          BAIDU_TTS_CONFIG.token = data.access_token;
+          return data.access_token;
+        }
+      } catch (e) {
+        console.error('获取Token失败:', e);
+      }
+      return null;
+    }
+    
+    // 使用百度TTS播放文字
+    async function speakWithBaidu(text) {
+      const token = await getBaiduToken();
+      if (!token) {
+        // Token获取失败，回退到浏览器语音
+        speakWithBrowser(text);
+        return;
+      }
+      
+      // 停止之前播放的音频
+      if (baiduAudio) {
+        baiduAudio.pause();
+        baiduAudio = null;
+      }
+      
+      // 构建TTS请求
+      const ttsUrl = `https://tsn.baidu.com/text2audio?tex=${encodeURIComponent(text)}&tok=${token}&cuid=baidu_tts&lan=zh&ctp=1&pdt=301&vol=9&rate=4&per=0`;
+      
+      baiduAudio = new Audio(ttsUrl);
+      baiduAudio.play().catch(e => {
+        console.log('百度TTS播放失败，回退到浏览器语音');
+        speakWithBrowser(text);
+      });
+    }
+    
+    // 浏览器原生语音（备选方案）
+    function speakWithBrowser(text) {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'zh-CN';
-        utterance.rate = 0.7;
-        utterance.pitch = 1.1;
-        // 尝试选择中文语音
+        utterance.rate = 0.8;
+        utterance.pitch = 1.0;
         const voices = window.speechSynthesis.getVoices();
         const zhVoice = voices.find(v => v.lang.startsWith('zh'));
         if (zhVoice) utterance.voice = zhVoice;
         window.speechSynthesis.speak(utterance);
       }
     }
+    
+    function playCharSound() {
+      if (!soundEnabled || !currentChar) return;
+      speakWithBaidu(currentChar.char);
+    }
+
+    function speakText(text) {
+      if (!soundEnabled) return;
+      speakWithBaidu(text);
+    }
 
     function playCorrectSound() {
-      speakText('答对啦！');
+      speakWithBaidu('答对啦！');
     }
 
     function playWrongSound() {
-      speakText('再想一想');
+      speakWithBaidu('再想一想');
     }
 
     function playCelebrateSound() {
-      speakText('恭喜过关！你真棒！');
+      speakWithBaidu('恭喜过关！你真棒！');
     }
 
     function toggleSound() {
@@ -755,12 +839,11 @@
       document.getElementById('soundToggle').textContent = soundEnabled ? '🔊' : '🔇';
     }
 
-    // 预加载语音列表
+    // 预加载语音（浏览器兼容）
     if ('speechSynthesis' in window) {
       window.speechSynthesis.onvoiceschanged = () => {
         window.speechSynthesis.getVoices();
       };
-      // 移动端需要用户交互后才能播放语音
       document.addEventListener('touchstart', function initVoices() {
         window.speechSynthesis.getVoices();
         document.removeEventListener('touchstart', initVoices);
